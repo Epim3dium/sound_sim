@@ -10,6 +10,7 @@
 #include "imgui-SFML.h"
 #include "imgui.h"
 #include <cstddef>
+#include <thread>
 #include <iostream>
 #include <algorithm>
 #include <vector>
@@ -61,11 +62,25 @@ public:
         frame = 0;
     }
 
-    void updateV() {
+    void updateVthreaded(size_t count = 2) {
+        sf::Vector2i seg_size(size_x / count, size_y / count);
+        std::vector<std::thread> workes;
+        for(int i = 0; i < count; i++) {
+            for(int j = 0; j < count; j++) {
+                auto from = sf::Vector2i(j * seg_size.x, i * seg_size.y);
+                auto to = from + seg_size;
+                workes.push_back(std::thread(&Simulation::updateV, std::ref(*this), from, to));
+            }
+        }
+        for(auto& w : workes) {
+            w.join();
+        }
+    }
+    void updateV(sf::Vector2i from = {0, 0}, sf::Vector2i to = {static_cast<int>(size_x), static_cast<int>(size_y)}) {
         auto& V = velocities;
-        auto& P = pressure;
-        for (int i = 0; i < size_y; i++) {
-            for (int j = 0; j < size_x; j++) {
+        const auto& P = pressure;
+        for (int i = from.y; i < to.y && i < size_y; i++) {
+            for (int j = from.x; j < to.x && j < size_x; j++) {
                 if(wall[i][j] == 1.f) {
                     V[i][j][0] = V[i][j][1] = V[i][j][2] = V[i][j][3] = 0.0;
                     continue;
@@ -82,14 +97,14 @@ public:
     void updateP() {
         for (int i = 0; i < size_y; i++) {
             for (int j = 0; j < size_x; j++) {
-                pressure[i][j] -= 0.5 * damping * std::reduce(velocities[i][j].begin(), velocities[i][j].end());
+                pressure[i][j] -= 0.5 * std::reduce(velocities[i][j].begin(), velocities[i][j].end());
                 pressure[i][j] *= damp_pressure;
             }
         }
     }
 
     void step() {
-        updateV();
+        updateVthreaded(2U);
         updateP();
         frame += 1;
     }
