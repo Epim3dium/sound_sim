@@ -4,13 +4,16 @@ set(SOURCE_FILES
 set(HEADER_FILES
 )
 add_compile_options(
-  #-Wall
-  #-Wextra
-  #-Wconversion
-  #-Wsign-conversion
-  $<$<CONFIG:DEBUG>:-glldb>
-  $<$<CONFIG:DEBUG>:-Og>
-  $<$<CONFIG:RELEASE>:-O3>
+    #-Wall
+    #-Wextra
+    #-Wconversion
+    #-Wsign-conversion
+    -I/opt/homebrew/opt/libomp/include -Xclang -fopenmp
+    -L/opt/homebrew/opt/libomp/lib -lomp
+    -glldb
+    $<$<CONFIG:DEBUG>:-glldb>
+    $<$<CONFIG:DEBUG>:-Og>
+    $<$<CONFIG:RELEASE>:-O3>
 )
 add_compile_definitions(
 $<$<CONFIG:DEBUG>:EPI_DEBUG>

@@ -16,10 +16,12 @@
 #include <vector>
 #include <array>
 #include <numeric>
+#include <omp.h>
 
+#define SCALE 1.f
 float pixel_size = 10.f;
-float size_x = 300.f;
-float size_y = 200.f;
+int size_x = 350.f * SCALE;
+int size_y = 200.f * SCALE;
 float damping = 1.00;
 float damp_pressure = 0.97f;
 
@@ -48,48 +50,49 @@ sf::Color getSciColor(float val, float minVal, float maxVal) {
 
 class Simulation {
 public:
+    size_t n = size_x;
     size_t frame;
-    std::vector<std::vector<float>> pressure;
-    std::vector<std::vector<std::array<float, 4U> > > velocities;
-    std::vector<std::vector<float>> wall;
+    float* pressure;
+    std::array<float, 4U>* velocities;
+    float* wall;
 
 
     Simulation() : 
-        pressure(size_y, std::vector<float>(size_x, 0.f)), 
-        velocities(size_y, std::vector<std::array<float, 4U> > (size_x) ) ,
-        wall(size_y, std::vector<float>(size_x, 0.f)) 
+        pressure(new float[size_y * size_x]), 
+        velocities(new std::array<float, 4U>[size_y * size_x]) ,
+        wall(new float[size_y * size_x]) 
     {
+        memset(wall, 0, sizeof(float) * size_x * size_y);
+        memset(velocities, 0, sizeof(float) * 4 * size_x * size_y);
+        memset(pressure, 0, sizeof(float) * size_x * size_y);
+
+        for(int i = 0; i < size_y; i++) { 
+            wall[i * n] = 1.f;
+            wall[i * n + size_x - 1] = 1.f;
+        }
+        for(int j = 0; j < size_x; j++) { 
+            wall[j] = 1.f;
+            wall[j + (size_y - 1) * n] = 1.f;
+        }
         frame = 0;
     }
 
-    void updateVthreaded(size_t count = 2) {
-        sf::Vector2i seg_size(size_x / count, size_y / count);
-        std::vector<std::thread> workes;
-        for(int i = 0; i < count; i++) {
-            for(int j = 0; j < count; j++) {
-                auto from = sf::Vector2i(j * seg_size.x, i * seg_size.y);
-                auto to = from + seg_size;
-                workes.push_back(std::thread(&Simulation::updateV, std::ref(*this), from, to));
-            }
-        }
-        for(auto& w : workes) {
-            w.join();
-        }
-    }
-    void updateV(sf::Vector2i from = {0, 0}, sf::Vector2i to = {static_cast<int>(size_x), static_cast<int>(size_y)}) {
+    void updateV() {
         auto& V = velocities;
         const auto& P = pressure;
-        for (int i = from.y; i < to.y && i < size_y; i++) {
-            for (int j = from.x; j < to.x && j < size_x; j++) {
-                if(wall[i][j] == 1.f) {
-                    V[i][j][0] = V[i][j][1] = V[i][j][2] = V[i][j][3] = 0.0;
+#pragma omp teams distribute parallel for collapse(2)
+        for (int i = 0; i < size_y; i++) {
+            for (int j = 0; j < size_x; j++) {
+                if(wall[i * n + j] == 1.f) {
+                    V[i*n + j][0] = V[i*n + j][1] = V[i*n + j][2] = V[i*n + j][3] = 0.0;
                     continue;
                 }
-                auto cell_pressure = P[i][j];
-                V[i][j][0] = i > 0 ? V[i][j][0] + cell_pressure - P[i - 1][j] : cell_pressure;
-                V[i][j][1] = j < size_x - 1 ? V[i][j][1] + cell_pressure - P[i][j + 1] : cell_pressure;
-                V[i][j][2] = i < size_y - 1 ? V[i][j][2] + cell_pressure - P[i + 1][j] : cell_pressure;
-                V[i][j][3] = j > 0 ? V[i][j][3] + cell_pressure - P[i][j - 1] : cell_pressure;
+                auto cell_pressure = P[i*n + j];
+                V[i*n + j][0] += cell_pressure - P[(i - 1) * n + j] ;
+                V[i*n + j][1] += cell_pressure - P[(i) * n + j + 1] ;
+
+                V[(i - 1) * n + j][2] += P[(i - 1) * n + j] - cell_pressure;
+                V[(i) * n + j + 1][3] += P[(i) * n + j + 1] - cell_pressure;
             }
         }
     }
@@ -97,14 +100,14 @@ public:
     void updateP() {
         for (int i = 0; i < size_y; i++) {
             for (int j = 0; j < size_x; j++) {
-                pressure[i][j] -= 0.5 * std::reduce(velocities[i][j].begin(), velocities[i][j].end());
-                pressure[i][j] *= damp_pressure;
+                pressure[i*n + j] -= 0.5 * (velocities[i*n + j][0] + velocities[i*n + j][1] + velocities[i*n + j][2] + velocities[i*n + j][3]);
+                pressure[i*n + j] *= damp_pressure;
             }
         }
     }
 
     void step() {
-        updateVthreaded(2U);
+        updateV();
         updateP();
         frame += 1;
     }
@@ -112,36 +115,36 @@ public:
         float r = 0xffffff;
         for (int i = 0; i < size_y; i++) 
             for (int j = 0; j < size_x; j++) 
-                r = std::min(r, pressure[i][j]);
+                r = std::min(r, pressure[i*n + j]);
         return r;
     }
     float getMaxDev() {
         float r = 0.f;
         for (int i = 0; i < size_y; i++) 
             for (int j = 0; j < size_x; j++) 
-                r = std::max(r, pressure[i][j]);
+                r = std::max(r, pressure[i*n + j]);
         return r;
+    }
+    sf::Vector2f getScale(sf::RenderTarget& rw) const {
+        return sf::Vector2f(static_cast<float>(rw.getSize().x) / size_x, static_cast<float>(rw.getSize().y) / size_y);
     }
     void draw(sf::RenderTarget& rw, sf::Image& img, float dev_min = -1.f, float dev_max = 1.f) {
         for (int i = 0; i < size_y; i++) {
             for (int j = 0; j < size_x; j++) {
-                if(wall[i][j] == 1.f) {
-                    img.setPixel(i, j, sf::Color::Green);
+                if(wall[i*n + j] == 1.f) {
+                    img.setPixel(sf::Vector2u(j, i), sf::Color::Green);
                 }else {
-                    img.setPixel(i, j, getSciColor(pressure[i][j], dev_min, dev_max));
+                    img.setPixel(sf::Vector2u(j, i), getSciColor(pressure[i*n + j], dev_min, dev_max));
                 }
             }
         }
         sf::Texture tex;
-        tex.loadFromImage(img);
-        sf::Sprite spr;
-        spr.setTexture(tex);
-        sf::Vector2f scale(rw.getSize().x / size_x, rw.getSize().y / size_y);
+        if(!tex.loadFromImage(img)) return;
+        sf::Sprite spr(tex);
+        sf::Vector2f scale = getScale(rw);
         spr.setScale(scale);
+
         rw.draw(spr);
-    }
-    sf::Vector2f getScale(sf::RenderTarget& rw) {
-        return sf::Vector2f(rw.getSize().x / size_x, rw.getSize().y / size_y);
     }
 };
 
@@ -153,18 +156,18 @@ struct SoundSource {
     float omega = 0.07f;
 
     void update(Simulation& sim) {
-        sim.pressure[pos.x][pos.y] = initial_mag * sin(omega * spawn_time);
+        sim.pressure[pos.x + pos.y * sim.n] = initial_mag * sin(omega * spawn_time);
         spawn_time ++;
     }
 };
 
 int main() {
     // Create the main window
-    sf::RenderWindow window(sf::VideoMode(size_x * pixel_size, size_y * pixel_size), "SFML window");
+    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(size_x * pixel_size, size_y * pixel_size)), "SFML window");
     std::vector<SoundSource> sources;
     Simulation sim;
     sf::Image sim_img;
-    sim_img.create(size_x, size_y);
+    sim_img.create(sf::Vector2u(size_x, size_y));
     float default_freq = 0.15f;
     float default_mag = 1.f;
     bool isBuilding = false;
@@ -194,17 +197,20 @@ int main() {
                 sources.back().omega = default_freq;
                 sources.back().initial_mag = default_mag;
             }
+            if(event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
+                sources.clear();
+            }
         }
         delT = deltaClock.restart();
         ImGui::SFML::Update(window, delT);
         if(isBuilding && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
-            sim.wall[mpos.x][mpos.y] = 1.f;
+            sim.wall[(size_t)mpos.x + (size_t)mpos.y * sim.n] = 1.f;
         }
         {
             ImGui::Begin("options");
-            ImGui::SliderFloat("change default frquency", &default_freq, 0.f, 1.f);
+            ImGui::SliderFloat("change default frquency", &default_freq, 0.f, 0.5f);
             ImGui::SliderInt("change default step_count", &step_count, 1, 5);
-            ImGui::SliderFloat("change default magnitude", &default_mag, 0.f, 2.f);
+            ImGui::SliderFloat("change default magnitude", &default_mag, 0.f, 10.f);
             if(ImGui::Button("build_mode")) {
                 isBuilding = !isBuilding;
             }
