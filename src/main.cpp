@@ -179,7 +179,7 @@ struct SoundSource {
 
     float omega = 0.07f;
 
-    #define MIN_ACCEPTABLE 0.001f
+    #define MIN_ACCEPTABLE 0.01f
     void update(Simulation& sim) {
         AABBu affected;
         float range = std::log2(MIN_ACCEPTABLE/initial_mag)/log2(damp_pressure);
