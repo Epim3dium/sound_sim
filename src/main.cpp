@@ -61,7 +61,7 @@ class Simulation {
 public:
     size_t size_x, size_y;
     size_t frame;
-    std::bitset<1000000U> updated;
+    bool* updated;
     std::array<float, 4U>* velocities;
     float* pressure;
     float* wall;
@@ -72,11 +72,13 @@ public:
         size_x(w), size_y(h),
         pressure(new float[size_y * size_x]), 
         velocities(new std::array<float, 4U>[size_y * size_x]) ,
-        wall(new float[size_y * size_x]) 
+        wall(new float[size_y * size_x]),
+        updated(new bool[size_x * size_y])
     {
         memset(wall, 0, sizeof(float) * size_x * size_y);
         memset(velocities, 0, sizeof(float) * 4 * size_x * size_y);
         memset(pressure, 0, sizeof(float) * size_x * size_y);
+        memset(updated, 0, size_x * size_y);
 
         for(int i = 0; i < size_y; i++) { 
             wall[i * size_x] = 1.f;
@@ -114,7 +116,7 @@ public:
     }
 
     void updateP(vec2u min, vec2u max) {
-#pragma omp parallel for
+#pragma omp parallel for collapse(2)
         for (int i = min.y; i < max.y; i++) {
             for (int j = min.x; j < max.x; j++) {
                 if(updated[i * size_x + j])
@@ -127,18 +129,22 @@ public:
         }
     }
 
-    void step() {
-        updated.reset();
+    void clampRegions() {
         for(auto& r : regions_to_update) {
             r.min.x = std::max(r.min.x, 0U);
             r.min.y = std::max(r.min.y, 0U);
 
             r.max.x = std::min((size_t)r.max.x, size_x);
             r.max.y = std::min((size_t)r.max.y, size_y);
-
+        }
+    }
+    void step() {
+        clampRegions();
+        memset(updated, false, size_x * size_y);
+        for(auto& r : regions_to_update) {
             updateV(r.min, r.max);
         }
-        updated.reset();
+        memset(updated, false, size_x * size_y);
         for(auto& r : regions_to_update) {
             updateP(r.min, r.max);
         }
@@ -163,18 +169,21 @@ public:
         return sf::Vector2f(static_cast<float>(rw.getSize().x) / size_x, static_cast<float>(rw.getSize().y) / size_y);
     }
     void draw(sf::RenderTarget& rw, sf::Image& img, float dev_min = -1.f, float dev_max = 1.f) {
-        for (int i = 0; i < size_y; i++) {
-            for (int j = 0; j < size_x; j++) {
-                if(wall[i*size_x + j] == 1.f) {
-                    img.setPixel(sf::Vector2u(j, i), sf::Color(0x04522bff));
-                }else {
-                    img.setPixel(sf::Vector2u(j, i), getSciColor(pressure[i*size_x + j], dev_min, dev_max));
+        clampRegions();
+        for(auto& r : regions_to_update) {
+            for (int i = r.min.y; i < r.max.y; i++) {
+                for (int j = r.min.x; j < r.max.x; j++) {
+                    if(wall[i*size_x + j] == 1.f) {
+                        img.setPixel(sf::Vector2u(j, i), sf::Color(0x04522bff));
+                    }else {
+                        img.setPixel(sf::Vector2u(j, i), getSciColor(pressure[i*size_x + j], dev_min, dev_max));
+                    }
                 }
-
             }
         }
         sf::Texture tex;
         if(!tex.loadFromImage(img)) return;
+
         sf::Sprite spr(tex);
         sf::Vector2f scale = getScale(rw);
         spr.setScale(scale);
@@ -190,7 +199,7 @@ struct SoundSource {
 
     float omega = 0.07f;
 
-    #define MIN_ACCEPTABLE 0.1f
+    #define MIN_ACCEPTABLE 0.05f
     void update(Simulation& sim) {
         AABBu affected;
         float range = std::log2(MIN_ACCEPTABLE/initial_mag)/log2(damp_pressure);
@@ -215,6 +224,7 @@ int main() {
     float default_freq = 0.15f;
     float default_mag = 1.f;
     bool isBuilding = false;
+    bool isDrawing = true;
     int step_count = 1;
 
     if(!ImGui::SFML::Init(window))
@@ -258,19 +268,20 @@ int main() {
             if(ImGui::Button("build_mode")) {
                 isBuilding = !isBuilding;
             }
+            if(ImGui::Button("draw_visualisation")) {
+                isDrawing = !isDrawing;
+            }
                 ImGui::Text("%f", 1.f / delT.asSeconds());
             ImGui::End();
         }
     
-        for(int i = 0; i < step_count; i++) {
-            for(auto& s : sources) {
-                s.update(sim);
-            }
-            sim.step();
-        }
-
+        for(auto& s : sources)
+            s.update(sim);
         window.clear();
-        sim.draw(window, sim_img);
+        if(isDrawing)
+            sim.draw(window, sim_img);
+        sim.step();
+
         ImGui::SFML::Render(window);
         window.display();
     }
