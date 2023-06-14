@@ -66,7 +66,7 @@ public:
     float* pressure;
     float* wall;
 
-    std::stack<AABBu> regions_to_update;
+    std::vector<AABBu> regions_to_update;
 
     Simulation(size_t w, size_t h) : 
         size_x(w), size_y(h),
@@ -89,19 +89,12 @@ public:
         frame = 0;
     }
 
-    void updateV() {
-        while(regions_to_update.size() != 0) {
-            auto r = regions_to_update.top();
-            regions_to_update.pop();
-            updateV(r.min, r.max);
-        }
-    }
     void updateV(vec2u min, vec2u max) {
         auto V = velocities;
         auto P = pressure;
 #pragma omp parallel for collapse(2)
-        for (int i = std::max(min.y, 0U); i < std::min((size_t)max.y, size_y); i++) {
-            for (int j = std::max(min.x, 0U); j < std::min((size_t)max.x, size_x); j++) {
+        for (int i = min.y; i < max.y; i++) {
+            for (int j = min.x; j < max.x; j++) {
                 if(updated[i * size_x + j])
                     continue;
                 updated[i * size_x + j] = true;
@@ -120,18 +113,36 @@ public:
         }
     }
 
-    void updateP() {
+    void updateP(vec2u min, vec2u max) {
 #pragma omp parallel for
-        for (int i = 0; i < size_y * size_x; i++) {
-            pressure[i] -= 0.5 * (velocities[i][0] + velocities[i][1] + velocities[i][2] + velocities[i][3]);
-            pressure[i] *= damp_pressure;
+        for (int i = min.y; i < max.y; i++) {
+            for (int j = min.x; j < max.x; j++) {
+                if(updated[i * size_x + j])
+                    continue;
+                updated[i * size_x + j] = true;
+
+                pressure[i * size_x + j] -= 0.5 * (velocities[i * size_x + j][0] + velocities[i * size_x + j][1] + velocities[i * size_x + j][2] + velocities[i * size_x + j][3]);
+                pressure[i * size_x + j] *= damp_pressure;
+            }
         }
     }
 
     void step() {
         updated.reset();
-        updateV();
-        updateP();
+        for(auto& r : regions_to_update) {
+            r.min.x = std::max(r.min.x, 0U);
+            r.min.y = std::max(r.min.y, 0U);
+
+            r.max.x = std::min((size_t)r.max.x, size_x);
+            r.max.y = std::min((size_t)r.max.y, size_y);
+
+            updateV(r.min, r.max);
+        }
+        updated.reset();
+        for(auto& r : regions_to_update) {
+            updateP(r.min, r.max);
+        }
+        regions_to_update.clear();
         frame += 1;
     }
     float getMinDev() {
@@ -179,7 +190,7 @@ struct SoundSource {
 
     float omega = 0.07f;
 
-    #define MIN_ACCEPTABLE 0.01f
+    #define MIN_ACCEPTABLE 0.1f
     void update(Simulation& sim) {
         AABBu affected;
         float range = std::log2(MIN_ACCEPTABLE/initial_mag)/log2(damp_pressure);
@@ -187,9 +198,8 @@ struct SoundSource {
         affected.min.y = pos.y - range; 
         affected.max.x = pos.x + range; 
         affected.max.y = pos.y + range; 
-        std::cerr << range << "\n";
 
-        sim.regions_to_update.push(affected);
+        sim.regions_to_update.push_back(affected);
         sim.pressure[pos.x + pos.y * sim.size_x] = initial_mag * sin(omega * spawn_time);
         spawn_time ++;
     }
