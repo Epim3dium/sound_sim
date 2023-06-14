@@ -55,7 +55,30 @@ sf::Color getSciColor(float val, float minVal, float maxVal) {
 struct AABBu {
     vec2u min;
     vec2u max;
+    vec2u size() const {
+        return max - min;
+    }
+    void merge(AABBu& aabb) {
+        min.x = std::min(min.x, aabb.min.x);
+        max.x = std::max(max.x, aabb.max.x);
+        min.y = std::min(min.y, aabb.min.y);
+        max.y = std::max(max.y, aabb.max.y);
+    }
 };
+bool isIntersecting(AABBu a, AABBu b) {
+  return
+    a.min.x <= b.max.x &&
+    a.max.x >= b.min.x &&
+    a.min.y <= b.max.y &&
+    a.max.y >= b.min.y;
+}
+vec2u calcIntersectionArea(AABBu a, AABBu b) {
+    vec2u r;
+    r.x = std::min(b.max.x - a.min.x, a.max.x - b.min.x);
+    r.y = std::min(b.max.y - a.min.y, a.max.y - b.min.y);
+    return r;
+}
+
 
 class Simulation {
 public:
@@ -115,17 +138,16 @@ public:
         }
     }
 
-    void updateP(vec2u min, vec2u max) {
-#pragma omp parallel for collapse(2)
-        for (int i = min.y; i < max.y; i++) {
-            for (int j = min.x; j < max.x; j++) {
-                if(updated[i * size_x + j])
-                    continue;
-                updated[i * size_x + j] = true;
-
-                pressure[i * size_x + j] -= 0.5 * (velocities[i * size_x + j][0] + velocities[i * size_x + j][1] + velocities[i * size_x + j][2] + velocities[i * size_x + j][3]);
-                pressure[i * size_x + j] *= damp_pressure;
+    void updateP() {
+#pragma omp parallel for
+        for (size_t i = 0; i < size_x * size_y; i++) {
+            if(!updated[i]) {
+                pressure[i] = 0;
+                continue;
             }
+
+            pressure[i] -= 0.5 * (velocities[i][0] + velocities[i][1] + velocities[i][2] + velocities[i][3]);
+            pressure[i] *= damp_pressure;
         }
     }
 
@@ -144,10 +166,7 @@ public:
         for(auto& r : regions_to_update) {
             updateV(r.min, r.max);
         }
-        memset(updated, false, size_x * size_y);
-        for(auto& r : regions_to_update) {
-            updateP(r.min, r.max);
-        }
+        updateP();
         regions_to_update.clear();
         frame += 1;
     }
@@ -157,6 +176,19 @@ public:
             for (int j = 0; j < size_x; j++) 
                 r = std::min(r, pressure[i*size_x + j]);
         return r;
+    }
+    #define AFFECT_AREA_THRESHOLD 0.5
+    void affectArea(AABBu aabb) {
+        for(auto& r : regions_to_update) {
+            if(isIntersecting(r, aabb)) {
+                auto area = calcIntersectionArea(r, aabb);
+                if(area.x * area.y > aabb.size().x * aabb.size().y * AFFECT_AREA_THRESHOLD) {
+                    r.merge(aabb);
+                    return;
+                }
+            }
+        }
+        regions_to_update.push_back(aabb);
     }
     float getMaxDev() {
         float r = 0.f;
@@ -208,7 +240,7 @@ struct SoundSource {
         affected.max.x = pos.x + range; 
         affected.max.y = pos.y + range; 
 
-        sim.regions_to_update.push_back(affected);
+        sim.affectArea(affected);
         sim.pressure[pos.x + pos.y * sim.size_x] = initial_mag * sin(omega * spawn_time);
         spawn_time ++;
     }
@@ -220,7 +252,7 @@ int main() {
     sf::RenderWindow window(sf::VideoMode(sf::Vector2u(sim.size_x * pixel_size, sim.size_y * pixel_size)), "SFML window");
     std::vector<SoundSource> sources;
     sf::Image sim_img;
-    sim_img.create(sf::Vector2u(sim.size_x, sim.size_y));
+    sim_img.create(sf::Vector2u(sim.size_x, sim.size_y), sf::Color::Magenta);
     float default_freq = 0.15f;
     float default_mag = 1.f;
     bool isBuilding = false;
@@ -277,7 +309,6 @@ int main() {
     
         for(auto& s : sources)
             s.update(sim);
-        window.clear();
         if(isDrawing)
             sim.draw(window, sim_img);
         sim.step();
