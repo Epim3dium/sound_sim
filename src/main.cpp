@@ -1,4 +1,5 @@
 #include "SFML/Graphics.hpp"
+#include "SFML/Graphics/BlendMode.hpp"
 #include "SFML/Graphics/Image.hpp"
 #include "SFML/Graphics/RectangleShape.hpp"
 #include "SFML/Graphics/RenderTarget.hpp"
@@ -9,7 +10,10 @@
 #include "SFML/Window/Mouse.hpp"
 #include "imgui-SFML.h"
 #include "imgui.h"
+
+#include <cmath>
 #include <cstddef>
+#include <stack>
 #include <thread>
 #include <iostream>
 #include <algorithm>
@@ -19,15 +23,16 @@
 #include <omp.h>
 
 #define SCALE 1.f
+#define GW 300
+#define GH 170
 float pixel_size = 10.f;
-int size_x = 350.f * SCALE;
-int size_y = 200.f * SCALE;
-float damping = 1.00;
 float damp_pressure = 0.97f;
 
 float initial_P = 200.f;
 float max_pressure = initial_P / 2.f;
 float min_presure = -initial_P / 2.f;
+
+typedef sf::Vector2u vec2u;
 
 sf::Color getSciColor(float val, float minVal, float maxVal) {
     val = std::fminf(std::fmaxf(val, minVal), maxVal- 0.0001);
@@ -47,17 +52,24 @@ sf::Color getSciColor(float val, float minVal, float maxVal) {
 
     return sf::Color(255.f*r,255*g,255*b, 255);
 }
+struct AABBu {
+    vec2u min;
+    vec2u max;
+};
 
 class Simulation {
 public:
-    size_t n = size_x;
+    size_t size_x, size_y;
     size_t frame;
-    float* pressure;
+    std::bitset<1000000U> updated;
     std::array<float, 4U>* velocities;
+    float* pressure;
     float* wall;
 
+    std::stack<AABBu> regions_to_update;
 
-    Simulation() : 
+    Simulation(size_t w, size_t h) : 
+        size_x(w), size_y(h),
         pressure(new float[size_y * size_x]), 
         velocities(new std::array<float, 4U>[size_y * size_x]) ,
         wall(new float[size_y * size_x]) 
@@ -67,46 +79,57 @@ public:
         memset(pressure, 0, sizeof(float) * size_x * size_y);
 
         for(int i = 0; i < size_y; i++) { 
-            wall[i * n] = 1.f;
-            wall[i * n + size_x - 1] = 1.f;
+            wall[i * size_x] = 1.f;
+            wall[i * size_x + size_x - 1] = 1.f;
         }
         for(int j = 0; j < size_x; j++) { 
             wall[j] = 1.f;
-            wall[j + (size_y - 1) * n] = 1.f;
+            wall[j + (size_y - 1) * size_x] = 1.f;
         }
         frame = 0;
     }
 
     void updateV() {
-        auto& V = velocities;
-        const auto& P = pressure;
-#pragma omp teams distribute parallel for collapse(2)
-        for (int i = 0; i < size_y; i++) {
-            for (int j = 0; j < size_x; j++) {
-                if(wall[i * n + j] == 1.f) {
-                    V[i*n + j][0] = V[i*n + j][1] = V[i*n + j][2] = V[i*n + j][3] = 0.0;
+        while(regions_to_update.size() != 0) {
+            auto r = regions_to_update.top();
+            regions_to_update.pop();
+            updateV(r.min, r.max);
+        }
+    }
+    void updateV(vec2u min, vec2u max) {
+        auto V = velocities;
+        auto P = pressure;
+#pragma omp parallel for collapse(2)
+        for (int i = std::max(min.y, 0U); i < std::min((size_t)max.y, size_y); i++) {
+            for (int j = std::max(min.x, 0U); j < std::min((size_t)max.x, size_x); j++) {
+                if(updated[i * size_x + j])
+                    continue;
+                updated[i * size_x + j] = true;
+
+                if(wall[i * size_x + j] == 1.f) {
+                    V[i*size_x + j][0] = V[i*size_x + j][1] = V[i*size_x + j][2] = V[i*size_x + j][3] = 0.0;
                     continue;
                 }
-                auto cell_pressure = P[i*n + j];
-                V[i*n + j][0] += cell_pressure - P[(i - 1) * n + j] ;
-                V[i*n + j][1] += cell_pressure - P[(i) * n + j + 1] ;
+                auto cell_pressure = P[i*size_x + j];
+                V[i*size_x + j][0] += cell_pressure - P[(i - 1) * size_x + j] ;
+                V[i*size_x + j][1] += cell_pressure - P[(i) * size_x + j + 1] ;
 
-                V[(i - 1) * n + j][2] += P[(i - 1) * n + j] - cell_pressure;
-                V[(i) * n + j + 1][3] += P[(i) * n + j + 1] - cell_pressure;
+                V[(i - 1) * size_x + j][2] += P[(i - 1) * size_x + j] - cell_pressure;
+                V[(i) * size_x + j + 1][3] += P[(i) * size_x + j + 1] - cell_pressure;
             }
         }
     }
 
     void updateP() {
-        for (int i = 0; i < size_y; i++) {
-            for (int j = 0; j < size_x; j++) {
-                pressure[i*n + j] -= 0.5 * (velocities[i*n + j][0] + velocities[i*n + j][1] + velocities[i*n + j][2] + velocities[i*n + j][3]);
-                pressure[i*n + j] *= damp_pressure;
-            }
+#pragma omp parallel for
+        for (int i = 0; i < size_y * size_x; i++) {
+            pressure[i] -= 0.5 * (velocities[i][0] + velocities[i][1] + velocities[i][2] + velocities[i][3]);
+            pressure[i] *= damp_pressure;
         }
     }
 
     void step() {
+        updated.reset();
         updateV();
         updateP();
         frame += 1;
@@ -115,14 +138,14 @@ public:
         float r = 0xffffff;
         for (int i = 0; i < size_y; i++) 
             for (int j = 0; j < size_x; j++) 
-                r = std::min(r, pressure[i*n + j]);
+                r = std::min(r, pressure[i*size_x + j]);
         return r;
     }
     float getMaxDev() {
         float r = 0.f;
         for (int i = 0; i < size_y; i++) 
             for (int j = 0; j < size_x; j++) 
-                r = std::max(r, pressure[i*n + j]);
+                r = std::max(r, pressure[i*size_x + j]);
         return r;
     }
     sf::Vector2f getScale(sf::RenderTarget& rw) const {
@@ -131,11 +154,12 @@ public:
     void draw(sf::RenderTarget& rw, sf::Image& img, float dev_min = -1.f, float dev_max = 1.f) {
         for (int i = 0; i < size_y; i++) {
             for (int j = 0; j < size_x; j++) {
-                if(wall[i*n + j] == 1.f) {
-                    img.setPixel(sf::Vector2u(j, i), sf::Color::Green);
+                if(wall[i*size_x + j] == 1.f) {
+                    img.setPixel(sf::Vector2u(j, i), sf::Color(0x04522bff));
                 }else {
-                    img.setPixel(sf::Vector2u(j, i), getSciColor(pressure[i*n + j], dev_min, dev_max));
+                    img.setPixel(sf::Vector2u(j, i), getSciColor(pressure[i*size_x + j], dev_min, dev_max));
                 }
+
             }
         }
         sf::Texture tex;
@@ -149,25 +173,35 @@ public:
 };
 
 struct SoundSource {
-    sf::Vector2i pos;
+    sf::Vector2u pos;
     float initial_mag = 2.f;
     size_t spawn_time = 0;
 
     float omega = 0.07f;
 
+    #define MIN_ACCEPTABLE 0.001f
     void update(Simulation& sim) {
-        sim.pressure[pos.x + pos.y * sim.n] = initial_mag * sin(omega * spawn_time);
+        AABBu affected;
+        float range = std::log2(MIN_ACCEPTABLE/initial_mag)/log2(damp_pressure);
+        affected.min.x = pos.x - range; 
+        affected.min.y = pos.y - range; 
+        affected.max.x = pos.x + range; 
+        affected.max.y = pos.y + range; 
+        std::cerr << range << "\n";
+
+        sim.regions_to_update.push(affected);
+        sim.pressure[pos.x + pos.y * sim.size_x] = initial_mag * sin(omega * spawn_time);
         spawn_time ++;
     }
 };
 
 int main() {
+    Simulation sim(GW, GH);
     // Create the main window
-    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(size_x * pixel_size, size_y * pixel_size)), "SFML window");
+    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(sim.size_x * pixel_size, sim.size_y * pixel_size)), "SFML window");
     std::vector<SoundSource> sources;
-    Simulation sim;
     sf::Image sim_img;
-    sim_img.create(sf::Vector2u(size_x, size_y));
+    sim_img.create(sf::Vector2u(sim.size_x, sim.size_y));
     float default_freq = 0.15f;
     float default_mag = 1.f;
     bool isBuilding = false;
@@ -193,7 +227,7 @@ int main() {
             if (event.type == sf::Event::Closed)
                 window.close();
             if(event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Right) {
-                sources.push_back({sf::Vector2i(mpos)});
+                sources.push_back({sf::Vector2u(mpos)});
                 sources.back().omega = default_freq;
                 sources.back().initial_mag = default_mag;
             }
@@ -204,7 +238,7 @@ int main() {
         delT = deltaClock.restart();
         ImGui::SFML::Update(window, delT);
         if(isBuilding && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
-            sim.wall[(size_t)mpos.x + (size_t)mpos.y * sim.n] = 1.f;
+            sim.wall[(size_t)mpos.x + (size_t)mpos.y * sim.size_x] = 1.f;
         }
         {
             ImGui::Begin("options");
