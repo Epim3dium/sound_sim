@@ -1,15 +1,21 @@
 set(SOURCE_FILES
     main.cpp
+    implot/implot.cpp
+    implot/implot_demo.cpp
+    implot/implot_items.cpp
 )
 set(HEADER_FILES
+    implot/implot.h
+    implot/implot_internal.h
+    sound_grid.hpp
+    sound_source.hpp
+    utils.hpp
 )
 add_compile_options(
     #-Wall
     #-Wextra
     #-Wconversion
     #-Wsign-conversion
-    -I/opt/homebrew/opt/libomp/include -Xclang -fopenmp
-    -L/opt/homebrew/opt/libomp/lib -lomp
     -glldb
     $<$<CONFIG:DEBUG>:-glldb>
     $<$<CONFIG:DEBUG>:-Og>
@@ -19,15 +25,17 @@ add_compile_definitions(
 $<$<CONFIG:DEBUG>:EPI_DEBUG>
 )
 
-add_executable(EpiSim
-    ${SOURCE_FILES} ${HEADER_FILES}
-)
+find_package(OpenMP REQUIRED)
+find_package(SFML 2.5 COMPONENTS graphics audio REQUIRED)
 
+link_directories(/opt/homebrew/opt/sfml/lib)
+
+add_executable(EpiSim ${SOURCE_FILES} ${HEADER_FILES} )
+target_include_directories(ImGui-SFML PUBLIC /opt/homebrew/opt/sfml/include)
 target_include_directories(EpiSim PUBLIC ./physics . ./../vendor)
+
 # Yep, that's it!
-target_link_libraries(EpiSim
-  PUBLIC ImGui-SFML::ImGui-SFML
-)
+target_link_libraries(EpiSim sfml-graphics sfml-audio ImGui-SFML::ImGui-SFML OpenMP::OpenMP_CXX)
 
 include(GNUInstallDirs)
 
@@ -43,14 +51,13 @@ if(NOT LINK_DEPS_STATIC)
 
   set_target_properties(
     ImGui-SFML
-    sfml-graphics sfml-system sfml-window
+    #sfml-graphics sfml-system sfml-window sfml-audio
     PROPERTIES
     INSTALL_RPATH $ORIGIN
   )
 
   install(TARGETS
     ImGui-SFML
-    sfml-graphics sfml-system sfml-window
     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

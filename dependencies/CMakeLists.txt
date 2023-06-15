@@ -6,10 +6,10 @@ set(IMGUI_VERSION 1.87)
 
 # It's nice to get stripped-down release zips instead of cloning
 # a repo and checking out a tag
-FetchContent_Declare(
-    SFML
-    GIT_REPOSITORY "https://github.com/SFML/SFML.git"
-)
+#FetchContent_Declare(
+#    SFML
+#    GIT_REPOSITORY "https://github.com/SFML/SFML.git"
+#)
 
 FetchContent_Declare(
   imgui
@@ -30,9 +30,7 @@ FetchContent_Declare(
 ## finally, let's build
 
 # SFML
-option(SFML_BUILD_AUDIO "Build audio" OFF)
-option(SFML_BUILD_NETWORK "Build network" OFF)
-FetchContent_MakeAvailable(sfml)
+#FetchContent_MakeAvailable(sfml)
 
 # Dear ImGui
 FetchContent_MakeAvailable(imgui)
