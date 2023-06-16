@@ -1,15 +1,9 @@
 #include "SFML/Audio/SoundBuffer.hpp"
 #include "SFML/Graphics.hpp"
 #include "SFML/Audio/Sound.hpp"
+#include "SFML/Audio/SoundStream.hpp"
 #include "SFML/Graphics/BlendMode.hpp"
 #include "SFML/Graphics/Image.hpp"
-#include "SFML/Graphics/RectangleShape.hpp"
-#include "SFML/Graphics/RenderTarget.hpp"
-#include "SFML/Graphics/Sprite.hpp"
-#include "SFML/Graphics/Texture.hpp"
-#include "SFML/System/Vector2.hpp"
-#include "SFML/Window/Event.hpp"
-#include "SFML/Window/Mouse.hpp"
 #include "implot/implot.h"
 #include "imgui-SFML.h"
 #include "imgui.h"
@@ -35,7 +29,7 @@ using namespace epi;
 #define GW 300
 #define GH 170
 float pixel_size = 10.f;
-float damp_pressure = 0.97f;
+float damp_pressure = 0.99f;
 
 float initial_P = 200.f;
 float max_pressure = initial_P / 2.f;
@@ -88,6 +82,51 @@ void RealtimePlot(std::string title, float data, float minVal = -1.f, float maxV
         ImPlot::EndPlot();
     }
 }
+class SoundGenerator {
+    std::vector<float> pressure_samples;
+    std::vector<int16_t> samples;
+    float time = 0.f;
+    sf::SoundBuffer buffer;
+public:
+    float time_thresh = 0.1f;
+    sf::Sound sound;
+
+
+    bool normalize = false;
+    void Update(float sample, float delT) {
+        if(sound.getVolume() == 0.f)
+            return;
+        pressure_samples.push_back(sample);
+        time += delT;
+        if(time > time_thresh) {
+            samples.clear();
+            if(normalize) {
+                float abs_max = 0.f;
+                for(auto p : pressure_samples)
+                    abs_max = std::max(abs_max, std::abs(p));
+                for(auto& p : pressure_samples)
+                    p /= abs_max;
+            }
+            for(auto p : pressure_samples)
+                samples.push_back(p * 30000);
+            pressure_samples.clear();
+            float sample_rate = static_cast<float>(samples.size()) / time;
+            sound.pause();
+            buffer.loadFromSamples(&samples[0], samples.size(), 1U, sample_rate);
+            sound.play();
+            time = 0.f;
+        }
+    }
+    SoundGenerator() {
+        sound.setBuffer(buffer);
+    }
+};
+struct DemoOptions {
+    float default_freq = 0.15f;
+    float default_mag = 1.f;
+    bool isBuilding = false;
+    bool isDrawing = true;
+};
 static void setupImGuiFont() {
     ImGuiIO& io = ImGui::GetIO();
     io.FontGlobalScale = 2.f;
@@ -96,24 +135,14 @@ int main() {
     Simulation sim(GW, GH);
     // Create the main window
     sf::RenderWindow window(sf::VideoMode(sim.size_x * pixel_size, sim.size_y * pixel_size), "SFML window");
-    window.setFramerateLimit(60U);
     std::vector<SoundSource> sources;
-    sf::Image sim_img;
-    sim_img.create(sim.size_x, sim.size_y);
-    float default_freq = 0.15f;
-    float default_mag = 1.f;
-    bool isBuilding = false;
-    bool isDrawing = true;
+    sf::Image sim_img; sim_img.create(sim.size_x, sim.size_y);
+    DemoOptions options;
+    SoundGenerator generator;
 
-    struct {
-        std::vector<float> samples;
-        float samples_time = 0.f;
-        size_t cur_buf = 0;
-        sf::SoundBuffer sndbuf[2];
-        sf::Sound emitter;
-        float pitch = 1.f;
-        float volume = 0.f;
-    }sound;
+    float pitch = 1.f;
+    float volume = 0.f;
+    int iters = 1;
 
     if(!ImGui::SFML::Init(window))
         exit(1);
@@ -138,8 +167,8 @@ int main() {
                 window.close();
             if(event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Right) {
                 sources.push_back({sf::Vector2u(mpos)});
-                sources.back().omega = default_freq;
-                sources.back().initial_mag = default_mag;
+                sources.back().omega = options.default_freq;
+                sources.back().initial_mag = options.default_mag;
             }
             if(event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
                 sources.clear();
@@ -147,63 +176,41 @@ int main() {
         }
         delT = deltaClock.restart();
         ImGui::SFML::Update(window, delT);
-        if(isBuilding && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
+        if(options.isBuilding && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
             sim.wall[(size_t)mpos.x + (size_t)mpos.y * sim.size_x] = 1.f;
         }
         {
             ImGui::Begin("options");
             ImGui::Text("%f", 1.f / delT.asSeconds());
             ImGui::Text("sources options:");
-            ImGui::SliderFloat("change default frquency", &default_freq, 0.1f, 3.0f);
-            ImGui::SliderFloat("change default magnitude", &default_mag, 0.f, 10.f);
+            ImGui::SliderFloat("change default frquency", &options.default_freq, 0.1f, 1.0f);
+            ImGui::SliderFloat("change default magnitude", &options.default_mag, 0.f, 10.f);
             ImGui::Text("sound options:");
-            ImGui::SliderFloat("change default pitch", &sound.pitch, 1.f, 10.f);
-            ImGui::SliderFloat("change default volume", &sound.volume, 0.f, 100.f);
+            ImGui::SliderFloat("change default pitch", &pitch, 1.f, 10.f);
+            ImGui::SliderFloat("change default volume", &volume, 0.f, 1000.f);
             if(ImGui::Button("build_mode")) {
-                isBuilding = !isBuilding;
+                options.isBuilding = !options.isBuilding;
             }
             if(ImGui::Button("draw_visualisation")) {
-                isDrawing = !isDrawing;
+                options.isDrawing = !options.isDrawing;
             }
             RealtimePlot("frequency", sim.pressure[(size_t)mpos.x + (size_t)mpos.y * sim.size_x]);
+            ImGui::SliderInt("change iterations", &iters, 0, 5);
 
 
             ImGui::End();
         }
-        sound.samples.push_back(sim.pressure[(size_t)mpos.x + (size_t)mpos.y * sim.size_x]);
-        sound.samples_time += delT.asSeconds();
-        if(sound.samples_time > 0.5f) {
-            std::vector<int16_t> sample_bytes;
-            for(auto& s : sound.samples) {
-                sample_bytes.push_back(s * 30766);
-            }
-            sound.samples.clear();
-
-            auto sample_rate = static_cast<float>(sample_bytes.size()) / sound.samples_time;
-            sound.sndbuf[sound.cur_buf].loadFromSamples(&sample_bytes[0], sample_bytes.size(), 1U , sample_rate);
-            sound.emitter.setVolume(0.f);
-            sound.emitter.pause();
-            sound.emitter.setBuffer(sound.sndbuf[sound.cur_buf]);
-
-            if(sound.cur_buf == 1) 
-                sound.cur_buf = 0;
-            else
-                sound.cur_buf = 1;
-
-            sound.emitter.setLoop(true);
-            sound.emitter.setPitch(sound.pitch);
-            sound.emitter.setVolume(sound.volume);
-
-            sound.emitter.play();
-            sound.samples_time = 0.f;
-            
-        }
     
-        for(auto& s : sources)
-            s.update(sim);
-        if(isDrawing)
+        for(int i = 0; i < iters; i++) {
+            for(auto& s : sources)
+                s.update(sim);
+            sim.step();
+            generator.Update(sim.pressure[(size_t)mpos.x + (size_t)mpos.y * sim.size_x], delT.asSeconds() / 2.f);
+        }
+        if(options.isDrawing)
             sim.draw(window, sim_img);
-        sim.step();
+        generator.sound.setPitch(pitch);
+        generator.sound.setVolume(volume);
 
         ImGui::SFML::Render(window);
         window.display();
