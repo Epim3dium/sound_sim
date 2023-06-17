@@ -41,8 +41,8 @@ if(NOT LINK_DEPS_STATIC)
     )
 endif()
 if (WIN32 AND BUILD_SHARED_LIBS)
-    add_custom_command(TARGET CMakeSFMLProject POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:CMakeSFMLProject> $<TARGET_FILE_DIR:CMakeSFMLProject> COMMAND_EXPAND_LISTS)
+    add_custom_command(TARGET EpiSoundSim POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:EpiSoundSim> $<TARGET_FILE_DIR:EpiSoundSim> COMMAND_EXPAND_LISTS)
 endif()
 
 #install(SCRIPT PostInstall.cmake)
