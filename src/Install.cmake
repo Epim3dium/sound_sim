@@ -1,4 +1,3 @@
-# Yep, that's it!
 target_compile_options(ImGui-SFML PRIVATE     -w)
 target_compile_options(sfml-graphics PRIVATE -w)
 target_compile_options(sfml-audio PRIVATE    -w)
@@ -18,7 +17,6 @@ install(TARGETS EpiSoundSim
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# Installing is not easy, when we're dealing with shared libs
 if(NOT LINK_DEPS_STATIC)
     set_target_properties(EpiSoundSim PROPERTIES
         INSTALL_RPATH $ORIGIN/../${CMAKE_INSTALL_LIBDIR}
@@ -37,7 +35,7 @@ if(NOT LINK_DEPS_STATIC)
         PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        NAMELINK_SKIP # don't need versionless .so's
+        NAMELINK_SKIP 
     )
 endif()
 if (WIN32 AND BUILD_SHARED_LIBS)
@@ -45,6 +43,5 @@ if (WIN32 AND BUILD_SHARED_LIBS)
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:EpiSoundSim> $<TARGET_FILE_DIR:EpiSoundSim> COMMAND_EXPAND_LISTS)
 endif()
 
-#install(SCRIPT PostInstall.cmake)
 
 include(CPack)
