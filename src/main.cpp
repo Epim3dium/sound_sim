@@ -129,7 +129,7 @@ struct DemoOptions {
 };
 static void setupImGuiFont() {
     ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = 2.f;
+    io.FontGlobalScale = 1.f;
 }
 int main() {
     Simulation sim(GW, GH);

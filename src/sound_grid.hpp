@@ -53,7 +53,7 @@ public:
     void updateV(vec2u min, vec2u max) {
         auto V = velocities;
         auto P = pressure;
-#pragma omp parallel for collapse(2)
+//#pragma omp parallel for collapse(2)
         for (int i = min.y; i < max.y; i++) {
             for (int j = min.x; j < max.x; j++) {
                 if(updated[i * size_x + j])
@@ -75,7 +75,7 @@ public:
     }
 
     void updateP() {
-#pragma omp parallel for
+//#pragma omp parallel for
         for (size_t i = 0; i < size_x * size_y; i++) {
             if(!updated[i]) {
                 pressure[i] = 0;
